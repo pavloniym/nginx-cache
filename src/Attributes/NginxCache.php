@@ -7,7 +7,6 @@ namespace Pavloniym\NginxCache\Attributes;
 use Attribute;
 use Illuminate\Routing\Route;
 use Pavloniym\NginxCache\Contracts\Types\NginxCacheType;
-use Pavloniym\NginxCache\Enums\NginxCacheTypeEnum;
 
 #[Attribute(Attribute::TARGET_METHOD)]
 class NginxCache
@@ -16,21 +15,21 @@ class NginxCache
     public ?NginxCacheType $cacheType = null;
 
     /**
-     * @param NginxCacheTypeEnum $type
-     * @param string|null $location
+     * @param class-string<NginxCacheType> $type
      * @param string|null $key
-     * @param string|null $responses
+     * @param string|null $location
      * @param int|null $duration
+     * @param string|null $responses
      */
     public function __construct(
-        public NginxCacheTypeEnum $type,
-        public ?string            $key = null,
-        public ?string            $location = null,
-        public ?int               $duration = null,
-        public ?string            $responses = null,
+        public string  $type,
+        public ?string $key = null,
+        public ?string $location = null,
+        public ?int    $duration = null,
+        public ?string $responses = null,
     )
     {
-        $this->cacheType = $type->getNginxCacheTypeInstance();
+        $this->cacheType = app($type);
     }
 
     /**

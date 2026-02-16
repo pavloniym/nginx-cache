@@ -64,7 +64,6 @@ class ListNginxCacheRoutesCommand extends Command
     protected function getApiRoutes(): iterable
     {
         return collect(Route::getRoutes()->getRoutes())
-            ->filter(static fn(\Illuminate\Routing\Route $route) => Str::startsWith($route->uri(), ['api/', '/api/']))
             ->map(static function (\Illuminate\Routing\Route $route): array {
                 try {
 
