@@ -1,169 +1,171 @@
+Вот полный текст твоего **README.md**, структурированный для GitHub. Я добавил оглавление для удобной навигации и объединил твой типовой конфиг Nginx с основной инструкцией.
+
+---
+
 # Laravel Nginx Cache
 
-Laravel-пакет для автоматической генерации конфигов кеширования Nginx на основе атрибутов в контроллерах.
+Laravel-пакет для автоматической генерации конфигурационных файлов кеширования Nginx на основе атрибутов в контроллерах.
+
+## Оглавление
+
+1. [Зачем это нужно]()
+2. [Установка]()
+3. [Настройка Nginx]()
+4. [Использование]()
+5. [Типы кеша]()
+6. [Команды]()
+7. [Кастомные типы]()
+8. [Интеграция в CI/CD]()
+
+---
 
 ## Зачем это нужно
 
-Вместо того, чтобы вручную прописывать location-блоки для кеширования API-endpoints в конфигах Nginx, пакет сканирует твои Laravel-контроллеры и генерирует конфиг автоматически. Просто вешаешь атрибут `#[NginxCache]` на метод контроллера — и готово.
+Вместо ручного прописывания `location` блоков для кеширования API-ендпоинтов в конфигах Nginx, пакет сканирует контроллеры и генерирует конфиг автоматически. Вы используете атрибут `#[NginxCache]` на методе контроллера, а пакет берет на себя формирование корректных правил для Nginx.
 
 ## Установка
 
 ```bash
 composer require pavloniym/nginx-cache
+
 ```
 
-Опубликуй конфиг:
+Опубликуйте конфигурационный файл:
 
 ```bash
 php artisan vendor:publish --tag=config
+
 ```
 
-В `config/nginx-cache.php`:
+В файле `config/nginx-cache.php` укажите путь, куда PHP должен записывать файл для Nginx:
 
 ```php
 return [
-    'path' => '/etc/nginx/conf.d/_cache',      // Путь для генерации конфигов
-    'filename' => 'locations.conf',             // Имя файла конфига
+    'path' => '/etc/nginx/conf.d/_cache',      // Директория для конфигов
+    'filename' => 'locations.conf',             // Имя выходного файла
 ];
+
 ```
+
+---
+
+## Настройка Nginx
+
+Для работы кеширования необходимо подготовить инфраструктуру на стороне Nginx.
+
+### Глобальные настройки (`nginx.conf`)
+
+Добавьте настройки зоны кеша и GeoIP в блок `http`:
+
+```nginx
+http {
+    
+    # ...
+    
+    # Add GeoIP2 (for SimpleWithCountryIsoCache)
+    geoip2 /var/www/html/storage/app/geoip/geoip.mmdb {
+        auto_reload 5m;
+        $geoip2_metadata_country_build metadata build_epoch;
+        $geoip2_data_country_code default=NL source=$http_x_forwarded_for country iso_code;
+        $geoip2_data_country_name country names en;
+    }
+
+    # ...
+
+    # Cache options
+    proxy_cache_path /var/cache/nginx levels=2 keys_zone=httpCache:1024M inactive=12h max_size=4096M;
+    proxy_cache_lock on;
+    proxy_cache_methods GET HEAD POST;
+    proxy_cache_min_uses 1;
+    proxy_ignore_headers Expires Cache-Control;
+    proxy_cache_use_stale error timeout invalid_header http_500 http_502 http_503 http_504;
+    proxy_cache_revalidate on;
+    proxy_cache_background_update on;
+}
+
+```
+
+### Настройка виртуального хоста
+
+Подключите сгенерированный файл внутри блока `server`:
+
+```nginx
+server {
+    # ...
+    
+    set $backend http://127.0.0.1:8080;
+    proxy_cache httpCache;
+
+    # Add cache locations config
+    include /etc/nginx/conf.d/_cache/locations.conf;
+
+    location / {
+        try_files $uri $uri/ @backend;
+    }
+
+    location @backend {
+        internal;
+        proxy_pass $backend$suffix;
+    }
+    
+    # ...
+}
+```
+
+---
 
 ## Использование
 
-### Базовый пример
+Просто добавьте атрибут к методу вашего контроллера:
 
 ```php
 use Pavloniym\NginxCache\Attributes\NginxCache;
 use Pavloniym\NginxCache\Types\SimpleCache;
-use Pavloniym\NginxCache\Types\UserCache;
-use Pavloniym\NginxCache\Types\WithoutCache;
 
 class ProductController extends Controller
 {
-    #[NginxCache(type: SimpleCache::class)]
+    #[NginxCache(type: SimpleCache::class, duration: 300)]
     public function index()
     {
         return Product::all();
     }
-    
-    #[NginxCache(
-        type: SimpleCache::class,
-        duration: 300,
-        responses: '200 404'
-    )]
-    public function show(Product $product)
-    {
-        return $product;
-    }
-    
-    #[NginxCache(type: UserCache::class)]
-    public function profile(Request $request)
-    {
-        // Кеш привязан к пользователю через cookie/authorization
-        return $request->user();
-    }
-    
-    #[NginxCache(type: WithoutCache::class)]
-    public function store(Request $request)
-    {
-        // Без кеша
-    }
 }
+
 ```
 
-### Встроенные типы кеша
+---
 
-**SimpleCache** — базовое кеширование
-- Ключ: `$request_uri|$request_method|$request_body`
-- Длительность: 60s
-- Ответы: any
+## Типы кеша
 
-**SimpleWithCountryIsoCache** — кеш с учётом страны пользователя
-- Ключ: `$host|$request_uri|$request_method|$request_body|$geoip2_data_country_code`
-- Длительность: 60s
-- Требует настроенный GeoIP2 модуль в Nginx [ngx_http_geoip2_module](https://github.com/leev/ngx_http_geoip2_module)
-- Пример конфига:
-```nginx
-http {
-    geoip2 /usr/share/GeoIP/GeoLite2-Country.mmdb {
-        auto_reload 5m;
-        $geoip2_data_country_code country iso_code;
-    }
-}
-```
+* **SimpleCache**: Базовый кеш по URI и телу запроса.
+* **SimpleWithCountryIsoCache**: Кеш, разделенный по странам (требует GeoIP2).
+* **SimpleWithIpCache**: Персонализированный кеш по IP адресу.
+* **UserCache**: Кеш для авторизованных пользователей (учитывает сессии и Bearer токены).
+* **WithoutCache**: Явное отключение кеширования для метода.
 
-**SimpleWithIpCache** — кеш с учётом IP
-- Ключ: `$host|$request_uri|$request_method|$request_body|$http_x_forwarded_for|$remote_addr`
-- Длительность: 60s
-- Полезно для rate limiting или персонализированного контента
-- Убедись, что `$http_x_forwarded_for` прокидывается корректно, если используешь proxy/load balancer
+---
 
-**UserCache** — кеш для авторизованных пользователей
-- Ключ: `$host|$request_uri|$request_method|$request_body|$cookie_{session_name}|$http_authorization`
-- Длительность: 1s (быстрое инвалидирование)
-- Использует Laravel session cookie из конфига
-- Учитывает Authorization header для API токенов
+## Команды
 
-**WithoutCache** — отключение кеша
-- Не генерирует location-блоки
-- Используй для эндпоинтов, которые не должны кешироваться
-
-### Параметры атрибута
-
-- `type` — класс типа кеша (обязательный), например `SimpleCache::class`
-- `duration` — время жизни кеша в секундах (опционально, переопределяет дефолт типа)
-- `responses` — какие HTTP-коды кешировать (опционально, по умолчанию `any`)
-- `key` — кастомный ключ кеша (опционально, переопределяет дефолт типа)
-- `location` — переопределить location-паттерн (опционально, берётся из роута)
-
-### Команды
-
-**Посмотреть список роутов с кешем:**
+**Просмотр списка всех кешируемых роутов:**
 
 ```bash
 php artisan nginx-cache:list
+
 ```
 
-Покажет таблицу со всеми API-роутами, их настройками кеша и генерируемыми location-блоками.
-
-**Сгенерировать конфиг для Nginx:**
+**Генерация файла конфигурации:**
 
 ```bash
 php artisan nginx-cache:build
+
 ```
 
-Создаёт файл с location-блоками в `/etc/nginx/conf.d/_cache/locations.conf` (или в той директории, что указана в конфиге).
-
-### Пример сгенерированного конфига
-
-```nginx
-location = /api/products { 
-    proxy_cache_key "$request_uri|$request_method|$request_body"; 
-    proxy_cache_valid any 60s; 
-    proxy_pass $backend; 
-}
-location = /api/products/ { 
-    proxy_cache_key "$request_uri|$request_method|$request_body"; 
-    proxy_cache_valid any 60s; 
-    proxy_pass $backend; 
-}
-
-location ~ /api/products/.* { 
-    proxy_cache_key "$request_uri|$request_method|$request_body"; 
-    proxy_cache_valid 200 404 300s; 
-    proxy_pass $backend; 
-}
-location ~ /api/products/.*/ { 
-    proxy_cache_key "$request_uri|$request_method|$request_body"; 
-    proxy_cache_valid 200 404 300s; 
-    proxy_pass $backend; 
-}
-```
-
-Обрати внимание: пути с параметрами (типа `/api/products/{id}`) автоматически конвертируются в regex-паттерны (`/api/products/.*`).
+---
 
 ## Кастомные типы кеша
 
-Создай свой тип, унаследовав `NginxCacheType`:
+Вы можете создавать свои правила, наследуя класс `NginxCacheType`:
 
 ```php
 namespace App\NginxCache;
@@ -176,60 +178,26 @@ class HeavyCache extends NginxCacheType
     public string $duration = '3600s';
     public string $responses = '200';
 }
+
 ```
 
-Используй напрямую:
-
-```php
-use App\NginxCache\HeavyCache;
-
-#[NginxCache(type: HeavyCache::class)]
-public function heavyEndpoint() { ... }
-```
-
-### Динамические ключи кеша
-
-Можно генерировать ключ динамически, используя Laravel конфиг:
-
-```php
-class ApiTokenCache extends NginxCacheType
-{
-    public string $duration = '30s';
-    public string $responses = 'any';
-
-    public function getKey(): string
-    {
-        $tokenHeader = config('sanctum.token_header', 'Authorization');
-        return sprintf('$host|$request_uri|$http_%s', strtolower($tokenHeader));
-    }
-}
-```
-
-Так работает `UserCache` — он тянет имя session cookie из конфига Laravel.
+---
 
 ## Интеграция в CI/CD
 
-Добавь в свой deploy-pipeline:
+Для автоматизации обновления правил добавьте выполнение команды в процесс деплоя:
 
 ```bash
 php artisan nginx-cache:build
 nginx -s reload
+
 ```
-
-Теперь при каждом деплое конфиги будут перегенерироваться автоматически.
-
-## Как это работает
-
-1. Пакет сканирует все роуты, зарегистрированные в приложении
-2. Через рефлексию читает атрибуты `#[NginxCache]` у методов контроллеров
-3. Генерирует location-блоки для Nginx на основе этих атрибутов
-4. Сохраняет их в указанный файл
 
 ## Требования
 
-- PHP 8.1+
-- Laravel 9.x+
-- Nginx с настроенным proxy_cache
+* PHP 8.1+
+* Laravel 9.x / 10.x / 11.x / 12.x
+* Nginx с модулем `ngx_http_geoip2_module` (для соответствующих типов кеша)
 
 ## License
 
