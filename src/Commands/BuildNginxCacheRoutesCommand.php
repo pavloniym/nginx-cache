@@ -59,7 +59,7 @@ class BuildNginxCacheRoutesCommand extends ListNginxCacheRoutesCommand
     {
         return collect($routes)
             ->filter()
-            ->unique(static fn(NginxCache $nginxCache): string => $nginxCache->type->value . $nginxCache->getLocation())
+            ->unique(static fn(NginxCache $nginxCache): string => $nginxCache->type . $nginxCache->getLocation())
             ->map(static fn(NginxCache $nginxCache): ?string => $nginxCache->getConfiguration())
             ->filter()
             ->values()

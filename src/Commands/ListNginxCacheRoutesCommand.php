@@ -20,7 +20,7 @@ class ListNginxCacheRoutesCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'nginx-cache:list';
+    protected $signature = 'nginx-cache:list {--all : Show all routes, not only with cache attribute}';
 
 
     /**
@@ -28,7 +28,7 @@ class ListNginxCacheRoutesCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Parse HTTP Api Controllers and show nginx cache configs';
+    protected $description = 'Parse HTTP Api Controllers and show nginx cache routes list';
 
     /**
      * Execute the console command.
@@ -37,9 +37,16 @@ class ListNginxCacheRoutesCommand extends Command
      */
     public function handle(): void
     {
+        $routes = $this->getApiRoutes();
+
+        // Если не указан флаг --all, показываем только роуты с кешем
+        if (!$this->option('all')) {
+            $routes = $routes->filter(static fn(array $item): bool => $item[1] !== null);
+        }
+
         $this->table(
             ['route', 'cache', 'duration', 'responses', 'key', 'location'],
-            $this->getApiRoutes()->map(static function (array $item): array {
+            $routes->map(static function (array $item): array {
 
 
                 /** @var \Illuminate\Routing\Route $route */
@@ -50,7 +57,7 @@ class ListNginxCacheRoutesCommand extends Command
 
                 return [
                     $route->uri(),
-                    $nginxCache?->type?->value,
+                    $nginxCache?->type ? class_basename($nginxCache->type) : null,
                     $nginxCache?->getDuration(),
                     $nginxCache?->getResponses(),
                     $nginxCache?->getKey(),
@@ -64,27 +71,28 @@ class ListNginxCacheRoutesCommand extends Command
     protected function getApiRoutes(): iterable
     {
         return collect(Route::getRoutes()->getRoutes())
+            ->filter(static function (\Illuminate\Routing\Route $route): bool {
+                $action = $route->getAction();
+                return isset($action['controller']) && is_string($action['controller']);
+            })
             ->map(static function (\Illuminate\Routing\Route $route): array {
                 try {
+                    [$controller, $method] = Str::parseCallback($route->getAction('controller'));
 
-                    $attributeOfMethod = collect((new ReflectionMethod($route->getControllerClass(), $route->getActionMethod()))->getAttributes(NginxCache::class))
-                        ->map(static fn(?ReflectionAttribute $attribute): ?object => $attribute?->newInstance())
-                        ->filter()
-                        ->first();
-
-                    if ($attributeOfMethod instanceof NginxCache) {
-
-                        return [
-                            $route,
-                            $attributeOfMethod->setRoute(route: $route)
-                        ];
+                    if (!class_exists($controller) || !method_exists($controller, $method)) {
+                        return [$route, null];
                     }
 
-                } catch (Throwable $exception) {
-                    dump($exception);
-                }
+                    $attribute = collect((new ReflectionMethod($controller, $method))->getAttributes(NginxCache::class))
+                        ->first()?->newInstance();
 
-                return [$route, null];
+                    return $attribute instanceof NginxCache
+                        ? [$route, $attribute->setRoute($route)]
+                        : [$route, null];
+
+                } catch (Throwable) {
+                    return [$route, null];
+                }
             })
             ->values();
     }
