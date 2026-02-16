@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pavloniym\NginxCache\Commands;
 
+use Illuminate\Support\Facades\File;
 use Pavloniym\NginxCache\Attributes\NginxCache;
 
 class BuildNginxCacheRoutesCommand extends ListNginxCacheRoutesCommand
@@ -40,10 +41,14 @@ class BuildNginxCacheRoutesCommand extends ListNginxCacheRoutesCommand
      */
     public function handle(): void
     {
-        $path = config('nginx-cache.path');
-        $filename = config('nginx-cache.filename');
+        $path = config('nginx-cache.path'); // /etc/nginx/conf.d/_cache
+        $filename = config('nginx-cache.filename'); // locations.conf
 
-        file_put_contents(sprintf('%s/%s', $path, $filename), PHP_EOL . $this->getLocations(routes: $this->getApiRoutesWithCache()) . PHP_EOL, FILE_APPEND);
+        if (!File::isDirectory($path)) {
+            File::makeDirectory($path, 0755, true, true);
+        }
+
+        File::append(sprintf('%s/%s', $path, $filename), PHP_EOL . $this->getLocations(routes: $this->getApiRoutesWithCache()) . PHP_EOL);
     }
 
     /**
