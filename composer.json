@@ -1,0 +1,21 @@
+{
+  "name": "pavloniym/nginx-cache",
+  "description": "nginx cache package for routes",
+  "type": "library",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "Pavloniym\\NginxCache\\": "src/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Pavloniym\\NginxCache\\NginxCacheServiceProvider"
+      ]
+    }
+  },
+  "require": {
+    "php": "^8.0"
+  }
+}
